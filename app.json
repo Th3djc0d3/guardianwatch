@@ -7,24 +7,36 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Guardian Watch needs your location to show maps and nearby alerts."
+      },
+      "config": {
+        "googleMapsApiKey": "AIzaSyC4gwLyToZsfJJM1Go4EychdKZwbcN-9ec"
       }
     },
+
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyC4gwLyToZsfJJM1Go4EychdKZwbcN-9ec"
+        }
+      }
     },
+
     "web": {
       "favicon": "./assets/favicon.png"
     }

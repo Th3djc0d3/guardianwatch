@@ -1,93 +1,125 @@
-import React, { memo, useEffect, useRef, useState } from 'react';
-import { View, Text, ActivityIndicator } from 'react-native';
-import MapView, { Marker, Circle, PROVIDER_GOOGLE } from 'react-native-maps';
+// app/screens/MapScreen.tsx
+import React, { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  StyleSheet,
+  Text,
+  Platform,
+} from 'react-native';
+import MapView, {
+  Circle,
+  Marker,
+  PROVIDER_GOOGLE,
+} from 'react-native-maps';
+import MapViewDirections from 'react-native-maps-directions';
 import * as Location from 'expo-location';
-import { Audio } from 'expo-av';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 
-import { usePoliceFeed } from '../hooks/usePoliceFeed';
+const GOOGLE_KEY = 'AIzaSyC4gwLyToZsfJJM1Go4EychdKZwbcN-9ec';
 
-const MapScreen = memo(() => {
+export default function MapScreen() {
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const mapRef = useRef<MapView | null>(null);
+  const [destination, setDestination] = useState<{ latitude: number; longitude: number } | null>(null);
 
-  // mock group riders – replace with DB feed
-  const groupRiders = [
-    { id: '1', name: 'Rider A', coord: { latitude: 47.6205, longitude: -122.3493 } },
-    { id: '2', name: 'Rider B', coord: { latitude: 47.615, longitude: -122.355 } },
-  ];
-
-  const { policeMarkers, playSiren } = usePoliceFeed(location, 7.5);
-
+  // ── Ask permission and fetch one-time position ─────────────────────────
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        setErrorMsg('Permission to access location was denied');
+        setErrorMsg('Location permission denied');
         return;
       }
-      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+      const loc = await Location.getCurrentPositionAsync({});
       setLocation(loc);
     })();
   }, []);
 
-  useEffect(() => {
-    if (policeMarkers.some(m => m.isAircraft)) playSiren();
-  }, [policeMarkers]);
-
+  // ── Loading / error view ───────────────────────────────────────────────
   if (!location) {
     return (
-      <View className="flex-1 items-center justify-center bg-black/5">
+      <SafeAreaView style={styles.center}>
         {errorMsg ? (
-          <Text className="text-red-500">{errorMsg}</Text>
+          <Text style={styles.error}>{errorMsg}</Text>
         ) : (
           <ActivityIndicator size="large" />
         )}
-      </View>
+      </SafeAreaView>
     );
   }
 
+  // ── Main map & overlays ────────────────────────────────────────────────
   return (
-    <MapView
-      ref={ref => (mapRef.current = ref)}
-      className="flex-1"
-      provider={PROVIDER_GOOGLE}
-      showsUserLocation
-      followsUserLocation
-      showsTraffic
-      region={{
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        latitudeDelta: 0.05,
-        longitudeDelta: 0.05,
-      }}
-      mapPadding={{ top: 40, right: 10, bottom: 80, left: 10 }}
-    >
-      {/* User radius 7.5 mi */}
-      <Circle
-        center={location.coords}
-        radius={12070} // metres
-        strokeWidth={1}
-        strokeColor="#1e3a8a55"
+    <SafeAreaView style={styles.container}>
+      {/* Search bar */}
+      <GooglePlacesAutocomplete
+        placeholder="Where to?"
+        fetchDetails
+        predefinedPlaces={[]}
+        currentLocation={false}
+        query={{ key: GOOGLE_KEY, language: 'en' }}
+        onPress={(_, details) => {
+          const { lat, lng } = details!.geometry.location;
+          setDestination({ latitude: lat, longitude: lng });
+        }}
+        onFail={e => console.warn('Places error', e)}
+        styles={{
+          container: { position: 'absolute', top: 10, width: '100%', zIndex: 1 },
+          textInput: { height: 44, borderRadius: 8, paddingHorizontal: 10 },
+          listView: { backgroundColor: '#fff' },
+        }}
       />
 
-      {/* Group riders */}
-      {groupRiders.map(r => (
-        <Marker key={r.id} coordinate={r.coord} title={r.name} description="Group rider" />
-      ))}
-
-      {/* Police & aircraft */}
-      {policeMarkers.map(p => (
-        <Marker
-          key={p.id}
-          coordinate={p.coord}
-          pinColor={p.isAircraft ? '#0ea5e9' : 'red'}
-          title={p.isAircraft ? 'Police Aircraft' : 'Police'}
-          description={p.description}
+      <MapView
+        {...(Platform.OS === 'android' ? { provider: PROVIDER_GOOGLE } : {})}
+        style={StyleSheet.absoluteFill}
+        showsUserLocation
+        followsUserLocation
+        region={{
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+          latitudeDelta: 0.05,
+          longitudeDelta: 0.05,
+        }}
+      >
+        {/* 7.5-mile radius */}
+        <Circle
+          center={location.coords}
+          radius={12070}
+          strokeWidth={1}
+          strokeColor="#1e3a8a55"
         />
-      ))}
-    </MapView>
-  );
-});
 
-export default MapScreen;
+        {/* Route polyline */}
+        {destination && (
+          <MapViewDirections
+            origin={location.coords}
+            destination={destination}
+            apikey={GOOGLE_KEY}
+            strokeWidth={4}
+            strokeColor="#2563eb"
+            onReady={({ distance, duration }) =>
+              console.log(
+                `Route: ${distance.toFixed(1)} km, ${duration.toFixed(0)} min`
+              )
+            }
+          />
+        )}
+
+        {/* Example group-member marker (replace with real data) */}
+        {/* <Marker
+          coordinate={{ latitude: 47.62, longitude: -122.35 }}
+          title="Rider A"
+          description="Group member"
+        /> */}
+      </MapView>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#fff' },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' },
+  error: { color: 'red', fontSize: 16 },
+});
