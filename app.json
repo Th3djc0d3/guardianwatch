@@ -13,7 +13,10 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Guardian Watch needs your location to show maps and nearby alerts."
+      }
     },
     "android": {
       "adaptiveIcon": {
