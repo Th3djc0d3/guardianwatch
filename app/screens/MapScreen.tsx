@@ -9,11 +9,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import MapView, {
-  Circle,
-  PROVIDER_GOOGLE,
-  LatLng,
-} from 'react-native-maps';
+import MapView, { Circle, PROVIDER_GOOGLE, LatLng } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import * as Location from 'expo-location';
 import {
@@ -23,12 +19,16 @@ import {
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
 import 'react-native-get-random-values';
 
-const GOOGLE_KEY = 'AIzaSyC4gwLyToZsfJJM1Go4EychdKZwbcN-9ec';
-const fetchPlace = async (placeId: string) => {
-  const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&key=${GOOGLE_KEY}`;
+const GOOGLE_KEY = process.env.EXPO_PUBLIC_PLACES_KEY!;
+
+/* ───────────────── helper ───────────────── */
+async function fetchPlace(placeId: string) {
+  const url =
+    `https://maps.googleapis.com/maps/api/place/details/json?place_id=` +
+    `${placeId}&key=${GOOGLE_KEY}`;
   const json = await (await fetch(url)).json();
   return json.result?.geometry?.location;
-};
+}
 
 export default function MapScreen() {
   const mapRef = useRef<MapView>(null);
@@ -36,27 +36,34 @@ export default function MapScreen() {
   const insets = useSafeAreaInsets();
 
   const [origin, setOrigin] = useState<LatLng | null>(null);
-  const [destination, setDestination] = useState<{
-    latlng: LatLng;
-    description: string;
-  } | null>(null);
+  const [destination, setDestination] = useState<
+    | { latlng: LatLng; description: string }
+    | null
+  >(null);
 
   const [navigating, setNavigating] = useState(false);
   const [etaMin, setEtaMin] = useState<number | null>(null);
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
-  /* ── live GPS ───────────────────────────── */
+  /* ─────────── live GPS ─────────── */
   useEffect(() => {
     let sub: Location.LocationSubscription | null = null;
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
       const first = await Location.getCurrentPositionAsync({});
-      setOrigin({ latitude: first.coords.latitude, longitude: first.coords.longitude });
+      setOrigin({
+        latitude: first.coords.latitude,
+        longitude: first.coords.longitude,
+      });
       sub = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, distanceInterval: 10 },
-        pos => setOrigin({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
+        pos =>
+          setOrigin({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          })
       );
     })();
     return () => sub?.remove();
@@ -67,19 +74,25 @@ export default function MapScreen() {
     setTimeout(() => setToast(null), 2500);
   };
 
-  /* ── manual Return-key lookup ───────────── */
   async function handleManualLookup(q: string) {
     if (!q) return;
     Keyboard.dismiss();
-    const url = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(q)}&key=${GOOGLE_KEY}`;
+    const url =
+      `https://maps.googleapis.com/maps/api/place/textsearch/json?query=` +
+      `${encodeURIComponent(q)}&key=${GOOGLE_KEY}`;
     try {
       const json = await (await fetch(url)).json();
       const loc = json.results?.[0]?.geometry?.location;
       if (loc) {
-        setDestination({ latlng: { latitude: loc.lat, longitude: loc.lng }, description: json.results[0].name });
+        setDestination({
+          latlng: { latitude: loc.lat, longitude: loc.lng },
+          description: json.results[0].name,
+        });
         setNavigating(true);
       } else showToast('Nothing found.');
-    } catch { showToast('Search failed.'); }
+    } catch {
+      showToast('Search failed.');
+    }
   }
 
   if (!origin) {
@@ -90,10 +103,9 @@ export default function MapScreen() {
     );
   }
 
-  /* ── main UI ────────────────────────────── */
   return (
     <SafeAreaView style={styles.container}>
-      {/* SEARCH */}
+      {/* ───────── search box ───────── */}
       <GooglePlacesAutocomplete
         ref={placesRef}
         placeholder="Where to?"
@@ -105,19 +117,24 @@ export default function MapScreen() {
           key: GOOGLE_KEY,
           language: 'en',
           location: `${origin.latitude},${origin.longitude}`,
-          radius: 50000,
+          rankby: 'distance',
+        }}
+        predefinedPlaces={[]}
+        currentLocation={false}
+        textInputProps={{
+          editable: !navigating,
+          returnKeyType: 'search',
+          onSubmitEditing: e => handleManualLookup(e.nativeEvent.text),
+          onFocus: () => {},
         }}
         onPress={async (data, details) => {
           let lat = details?.geometry?.location?.lat;
           let lng = details?.geometry?.location?.lng;
-
-          // details can be undefined in some SDK responses; fetch manually
           if (!lat || !lng) {
             const fetched = await fetchPlace(data.place_id);
             lat = fetched?.lat;
             lng = fetched?.lng;
           }
-
           if (lat && lng) {
             setDestination({
               latlng: { latitude: lat, longitude: lng },
@@ -126,14 +143,7 @@ export default function MapScreen() {
             placesRef.current?.setAddressText(data.description);
             setNavigating(true);
             Keyboard.dismiss();
-          } else {
-            showToast('Unable to get coordinates.');
-          }
-        }}
-        textInputProps={{
-          editable: !navigating,
-          returnKeyType: 'search',
-          onSubmitEditing: e => handleManualLookup(e.nativeEvent.text),
+          } else showToast('Unable to get coordinates.');
         }}
         styles={{
           container: {
@@ -162,7 +172,7 @@ export default function MapScreen() {
         }}
       />
 
-      {/* MAP */}
+      {/* ───────── map ───────── */}
       <MapView
         ref={mapRef}
         {...(Platform.OS === 'android' ? { provider: PROVIDER_GOOGLE } : {})}
@@ -202,7 +212,7 @@ export default function MapScreen() {
         )}
       </MapView>
 
-      {/* NAV CONTROLS + ETA */}
+      {/* ───────── nav controls ───────── */}
       {navigating && destination && (
         <>
           <Pressable
@@ -239,9 +249,11 @@ export default function MapScreen() {
   );
 }
 
+/* ───────── styles ───────── */
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
   endBtn: {
     position: 'absolute',
     bottom: 40,
@@ -254,6 +266,7 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   btnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+
   etaCard: {
     position: 'absolute',
     alignSelf: 'center',
@@ -265,6 +278,7 @@ const styles = StyleSheet.create({
   },
   etaText: { color: '#fff', fontSize: 16, fontWeight: '600' },
   etaSub: { color: '#dbeafe', fontSize: 12, marginTop: 2 },
+
   toast: {
     position: 'absolute',
     alignSelf: 'center',
