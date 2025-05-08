@@ -14,6 +14,6 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff', padding: 20 },
-  heading: { fontSize: 20, fontWeight: '600', marginBottom: 12 },
-  item: { fontSize: 16, marginBottom: 6 },
+  heading:  { fontSize: 20, fontWeight: '600', marginBottom: 12 },
+  item:     { fontSize: 16, marginBottom: 6 },
 });
