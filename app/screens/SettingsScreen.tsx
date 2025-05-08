@@ -1,14 +1,19 @@
 import React from 'react';
-import { Text } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, StyleSheet, Text } from 'react-native';
 
-const SettingsScreen = () => (
-  <SafeAreaView className="flex-1 bg-white p-4 gap-y-4">
-    <Text className="text-xl font-semibold">Settings</Text>
-    <Text className="text-base">• Manage API Keys</Text>
-    <Text className="text-base">• Notification Preferences</Text>
-    <Text className="text-base">• Join / Create Group</Text>
-  </SafeAreaView>
-);
+export default function SettingsScreen() {
+  return (
+    <SafeAreaView style={styles.container}>
+      <Text style={styles.heading}>Settings</Text>
+      <Text style={styles.item}>• Manage API Keys</Text>
+      <Text style={styles.item}>• Notification Preferences</Text>
+      <Text style={styles.item}>• Join / Create Group</Text>
+    </SafeAreaView>
+  );
+}
 
-export default SettingsScreen;
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#fff', padding: 20 },
+  heading: { fontSize: 20, fontWeight: '600', marginBottom: 12 },
+  item: { fontSize: 16, marginBottom: 6 },
+});

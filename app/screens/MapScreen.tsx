@@ -2,28 +2,31 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Platform,
   StyleSheet,
   Text,
-  Platform,
 } from 'react-native';
-import MapView, {
-  Circle,
-  Marker,
-  PROVIDER_GOOGLE,
-} from 'react-native-maps';
+import MapView, { Circle, PROVIDER_GOOGLE } from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import * as Location from 'expo-location';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from 'react-native-safe-area-context';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+import 'react-native-get-random-values';              // crypto polyfill for uuid v9
 
 const GOOGLE_KEY = 'AIzaSyC4gwLyToZsfJJM1Go4EychdKZwbcN-9ec';
 
 export default function MapScreen() {
+  const insets = useSafeAreaInsets();                // safe-area for notch
   const [location, setLocation] = useState<Location.LocationObject | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [destination, setDestination] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [destination, setDestination] = useState<{ lat: number; lng: number } | null>(
+    null
+  );
 
-  // ── Ask permission and fetch one-time position ─────────────────────────
+  /* ── ask permission & grab location once ──────────────────────────── */
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -36,7 +39,7 @@ export default function MapScreen() {
     })();
   }, []);
 
-  // ── Loading / error view ───────────────────────────────────────────────
+  /* ── loading / error fallback ─────────────────────────────────────── */
   if (!location) {
     return (
       <SafeAreaView style={styles.center}>
@@ -49,28 +52,48 @@ export default function MapScreen() {
     );
   }
 
-  // ── Main map & overlays ────────────────────────────────────────────────
+  /* ── main map & overlays ──────────────────────────────────────────── */
   return (
     <SafeAreaView style={styles.container}>
-      {/* Search bar */}
+      {/* ── SEARCH BAR ──────────────────────────────────────────────── */}
       <GooglePlacesAutocomplete
         placeholder="Where to?"
         fetchDetails
-        predefinedPlaces={[]}
-        currentLocation={false}
         query={{ key: GOOGLE_KEY, language: 'en' }}
+        predefinedPlaces={[]}          // avoid undefined.filter crash
+        currentLocation={false}
+        textInputProps={{ onFocus: () => {} }}  // avoid undefined.onFocus crash
         onPress={(_, details) => {
           const { lat, lng } = details!.geometry.location;
-          setDestination({ latitude: lat, longitude: lng });
+          setDestination({ lat, lng });
         }}
-        onFail={e => console.warn('Places error', e)}
+        onFail={err => console.warn('Places error →', err)}   // prints API errors
         styles={{
-          container: { position: 'absolute', top: 10, width: '100%', zIndex: 1 },
-          textInput: { height: 44, borderRadius: 8, paddingHorizontal: 10 },
-          listView: { backgroundColor: '#fff' },
+          container: {
+            position: 'absolute',
+            top: insets.top + 10,       // below notch / Dynamic Island
+            left: 0,
+            right: 0,
+            zIndex: 1,
+            pointerEvents: 'box-none',  // let map receive touches
+          },
+          textInput: {
+            height: 44,
+            marginHorizontal: 16,
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            backgroundColor: '#fff',
+            elevation: 3,
+          },
+          listView: {
+            marginHorizontal: 16,
+            elevation: 4,
+            pointerEvents: 'auto',
+          },
         }}
       />
 
+      {/* ── MAP ─────────────────────────────────────────────────────── */}
       <MapView
         {...(Platform.OS === 'android' ? { provider: PROVIDER_GOOGLE } : {})}
         style={StyleSheet.absoluteFill}
@@ -83,7 +106,7 @@ export default function MapScreen() {
           longitudeDelta: 0.05,
         }}
       >
-        {/* 7.5-mile radius */}
+        {/* user radius 7.5 mi */}
         <Circle
           center={location.coords}
           radius={12070}
@@ -91,7 +114,7 @@ export default function MapScreen() {
           strokeColor="#1e3a8a55"
         />
 
-        {/* Route polyline */}
+        {/* route polyline */}
         {destination && (
           <MapViewDirections
             origin={location.coords}
@@ -101,18 +124,11 @@ export default function MapScreen() {
             strokeColor="#2563eb"
             onReady={({ distance, duration }) =>
               console.log(
-                `Route: ${distance.toFixed(1)} km, ${duration.toFixed(0)} min`
+                `Route: ${distance.toFixed(1)} km • ${duration.toFixed(0)} min`
               )
             }
           />
         )}
-
-        {/* Example group-member marker (replace with real data) */}
-        {/* <Marker
-          coordinate={{ latitude: 47.62, longitude: -122.35 }}
-          title="Rider A"
-          description="Group member"
-        /> */}
       </MapView>
     </SafeAreaView>
   );
@@ -120,6 +136,11 @@ export default function MapScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
   error: { color: 'red', fontSize: 16 },
 });
