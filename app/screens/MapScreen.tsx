@@ -2,6 +2,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Keyboard,
   Platform,
   Pressable,
@@ -30,77 +31,104 @@ export default function MapScreen() {
   const placesRef = useRef<GooglePlacesAutocomplete>(null);
   const insets = useSafeAreaInsets();
 
-  const [location, setLocation] = useState<Location.LocationObject | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
-  const [destination, setDestination] = useState<
-    | null
-    | {
-        latlng: LatLng;
-        description: string;
-      }
-  >(null);
+  const [origin, setOrigin] = useState<LatLng | null>(null);
+  const [destination, setDestination] = useState<{
+    latlng: LatLng;
+    description: string;
+  } | null>(null);
 
-  /* ───────────────────────── current position ───────────────────────── */
+  const [navigating, setNavigating] = useState(false);
+  const [etaMin, setEtaMin] = useState<number | null>(null);
+  const [distanceKm, setDistanceKm] = useState<number | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  /* ───────────────────── location permission + watch ────────────────── */
   useEffect(() => {
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+    let sub: Location.LocationSubscription | null = null;
+
+    async function ensurePermission() {
+      let { status } = await Location.getForegroundPermissionsAsync();
       if (status !== 'granted') {
-        setErrorMsg('Location permission denied');
+        const req = await Location.requestForegroundPermissionsAsync();
+        status = req.status;
+      }
+      if (status !== 'granted') {
+        Alert.alert(
+          'Location needed',
+          'Guardian Watch needs your location to suggest nearby places.',
+          [{ text: 'Try Again', onPress: ensurePermission }]
+        );
         return;
       }
-      const loc = await Location.getCurrentPositionAsync({});
-      setLocation(loc);
-    })();
+
+      const initial = await Location.getCurrentPositionAsync({});
+      setOrigin({
+        latitude: initial.coords.latitude,
+        longitude: initial.coords.longitude,
+      });
+
+      sub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, distanceInterval: 10 },
+        pos => {
+          setOrigin({
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          });
+        }
+      );
+    }
+
+    ensurePermission();
+    return () => sub?.remove();
   }, []);
 
-  /* ────────────────── fallback: Geocode or Text Search ───────────────── */
-  async function manualLookup(query: string) {
+  /* ────────────────── fallback manual lookup (Return key) ───────────── */
+  async function handleManualLookup(query: string) {
     if (!query) return;
-    try {
-      const geoURL = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
+    Keyboard.dismiss();
+
+    const endpoints = [
+      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
         query
-      )}&key=${GOOGLE_KEY}`;
-      const geo = await (await fetch(geoURL)).json();
-      if (geo.results?.[0]) {
-        const { lat, lng } = geo.results[0].geometry.location;
-        setDestination({ latlng: { latitude: lat, longitude: lng }, description: query });
-        return;
-      }
-      const textURL = `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(
+      )}&key=${GOOGLE_KEY}`,
+      `https://maps.googleapis.com/maps/api/place/textsearch/json?query=${encodeURIComponent(
         query
-      )}&key=${GOOGLE_KEY}`;
-      const txt = await (await fetch(textURL)).json();
-      if (txt.results?.[0]) {
-        const { lat, lng } = txt.results[0].geometry.location;
-        setDestination({ latlng: { latitude: lat, longitude: lng }, description: txt.results[0].name });
-      } else {
-        showToast('Nothing found for that search.');
-      }
-    } catch {
-      showToast('Search failed – check your network or API key.');
+      )}&key=${GOOGLE_KEY}`,
+    ];
+
+    for (const url of endpoints) {
+      try {
+        const json = await (await fetch(url)).json();
+        const loc = json.results?.[0]?.geometry?.location;
+        if (loc) {
+          setDestination({
+            latlng: { latitude: loc.lat, longitude: loc.lng },
+            description: query,
+          });
+          setNavigating(true);
+          return;
+        }
+      } catch {}
     }
+    showToast('Place not found.');
   }
 
+  /* ───────────────────────── toast helper ───────────────────────────── */
   function showToast(msg: string) {
     setToast(msg);
     setTimeout(() => setToast(null), 2500);
   }
 
-  /* ───────────────────────── loading / error ───────────────────────── */
-  if (!location) {
+  /* ───────────────────────── loading spinner ───────────────────────── */
+  if (!origin) {
     return (
       <SafeAreaView style={styles.center}>
-        {errorMsg ? (
-          <Text style={styles.error}>{errorMsg}</Text>
-        ) : (
-          <ActivityIndicator size="large" />
-        )}
+        <ActivityIndicator size="large" />
       </SafeAreaView>
     );
   }
 
-  /* ─────────────────────────── main screen ─────────────────────────── */
+  /* ───────────────────────── main screen ──────────────────────────── */
   return (
     <SafeAreaView style={styles.container}>
       {/* ▸▸ SEARCH BAR */}
@@ -110,20 +138,36 @@ export default function MapScreen() {
         minLength={2}
         fetchDetails
         enablePoweredByContainer={false}
-        query={{ key: GOOGLE_KEY, language: 'en' }}
+        query={{
+          key: GOOGLE_KEY,
+          language: 'en',
+          location: `${origin.latitude},${origin.longitude}`,
+          radius: 50000, // 50 km bias toward user
+        }}
         predefinedPlaces={[]}
-        currentLocation={false}
+        currentLocation={true}
+        currentLocationLabel="Use Current Location"
         textInputProps={{
           returnKeyType: 'search',
-          onSubmitEditing: e => manualLookup(e.nativeEvent.text),
+          editable: !navigating,
+          onSubmitEditing: e => handleManualLookup(e.nativeEvent.text),
         }}
         onPress={(data, details) => {
-          const { lat, lng } = details!.geometry.location;
-          setDestination({
-            latlng: { latitude: lat, longitude: lng },
-            description: data.description,
-          });
+          if (data.description === 'Use Current Location') {
+            setDestination({
+              latlng: origin,
+              description: 'Current location',
+            });
+          } else {
+            const { lat, lng } = details!.geometry.location;
+            setDestination({
+              latlng: { latitude: lat, longitude: lng },
+              description: data.description,
+            });
+            placesRef.current?.setAddressText(data.description);
+          }
           Keyboard.dismiss();
+          setNavigating(true);
         }}
         onFail={err => console.warn('Places error →', err)}
         styles={{
@@ -133,7 +177,7 @@ export default function MapScreen() {
             left: 0,
             right: 0,
             zIndex: 3,
-            pointerEvents: 'box-none',
+            pointerEvents: navigating ? 'none' : 'box-none',
           },
           textInput: {
             height: 44,
@@ -157,66 +201,83 @@ export default function MapScreen() {
       {/* ▸▸ MAP */}
       <MapView
         ref={mapRef}
-        {...(Platform.OS === 'android' ? { provider: PROVIDER_GOOGLE } : {})}
+        {...(Platform.OS === 'android'
+          ? { provider: PROVIDER_GOOGLE }
+          : {})}
         style={StyleSheet.absoluteFill}
         showsUserLocation
         followsUserLocation
-        initialRegion={{
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
+        region={{
+          latitude: origin.latitude,
+          longitude: origin.longitude,
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
         }}
       >
-        {/* 7.5-mile radius */}
         <Circle
-          center={location.coords}
+          center={origin}
           radius={12070}
           strokeWidth={1}
           strokeColor="#1e3a8a55"
         />
 
-        {/* Route polyline */}
         {destination && (
           <MapViewDirections
-            origin={location.coords}
+            origin={origin}
             destination={destination.latlng}
             apikey={GOOGLE_KEY}
             strokeWidth={4}
             strokeColor="#2563eb"
-            onReady={({ distance, duration }) =>
-              console.log(
-                `Route: ${distance.toFixed(1)} km • ${duration.toFixed(0)} min`
-              )
-            }
+            onReady={({ distance, duration, coordinates }) => {
+              setDistanceKm(distance);
+              setEtaMin(duration);
+              mapRef.current?.fitToCoordinates(coordinates, {
+                edgePadding: { top: 80, right: 80, bottom: 80, left: 80 },
+                animated: true,
+              });
+            }}
           />
         )}
       </MapView>
 
-      {/* ▸▸ START NAVIGATION BUTTON */}
-      {destination && (
+      {/* ▸▸ NAV CONTROLS */}
+      {!navigating && destination && (
         <Pressable
           style={({ pressed }) => [
             styles.button,
             { opacity: pressed ? 0.85 : 1 },
           ]}
-          onPress={() => {
-            // Zoom map to fit both points
-            mapRef.current?.fitToCoordinates(
-              [
-                destination.latlng,
-                {
-                  latitude: location.coords.latitude,
-                  longitude: location.coords.longitude,
-                },
-              ],
-              { edgePadding: { top: 80, right: 80, bottom: 80, left: 80 }, animated: true }
-            );
-            console.log('Navigation started to', destination.description);
-          }}
+          onPress={() => setNavigating(true)}
         >
           <Text style={styles.buttonText}>Start Navigation</Text>
         </Pressable>
+      )}
+
+      {navigating && destination && (
+        <>
+          <Pressable
+            style={({ pressed }) => [
+              styles.buttonEnd,
+              { opacity: pressed ? 0.85 : 1 },
+            ]}
+            onPress={() => {
+              setNavigating(false);
+              setDestination(null);
+              setEtaMin(null);
+              setDistanceKm(null);
+              placesRef.current?.setAddressText('');
+            }}
+          >
+            <Text style={styles.buttonText}>End Navigation</Text>
+          </Pressable>
+
+          <View style={[styles.etaCard, { top: insets.top + 60 }]}>
+            <Text style={styles.etaText}>
+              {distanceKm?.toFixed(1)} km • {Math.round(etaMin ?? 0)} min
+            </Text>
+            <Text style={styles.etaSub}>{destination.description}</Text>
+          </View>
+        </>
       )}
 
       {/* ▸▸ TOAST */}
@@ -238,6 +299,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#fff',
   },
   error: { color: 'red', fontSize: 16 },
+
   button: {
     position: 'absolute',
     bottom: 40,
@@ -249,7 +311,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     elevation: 4,
   },
+  buttonEnd: {
+    position: 'absolute',
+    bottom: 40,
+    left: '18%',
+    right: '18%',
+    backgroundColor: '#dc2626',
+    borderRadius: 30,
+    paddingVertical: 14,
+    alignItems: 'center',
+    elevation: 4,
+  },
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+
+  etaCard: {
+    position: 'absolute',
+    alignSelf: 'center',
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    elevation: 4,
+  },
+  etaText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  etaSub: { color: '#dbeafe', fontSize: 12, marginTop: 2 },
+
   toast: {
     position: 'absolute',
     alignSelf: 'center',
