@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -26,11 +27,11 @@ import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplet
 import { Ionicons } from '@expo/vector-icons';
 import 'react-native-get-random-values';
 
-// your ENV key
+// Ensure you have EXPO_PUBLIC_PLACES_KEY in your .env
 const GOOGLE_KEY = process.env.EXPO_PUBLIC_PLACES_KEY!;
-if (!GOOGLE_KEY) throw new Error('Missing EXPO_PUBLIC_PLACES_KEY');
+if (!GOOGLE_KEY) throw new Error('Set EXPO_PUBLIC_PLACES_KEY in your .env');
 
-// dummy data
+// Dummy group & police-plane coords (replace with real feed)
 const GROUP = [
   { id: '1', name: 'Alice', latlng: { latitude: 47.61, longitude: -122.335 }, status: 'On route' },
   { id: '2', name: 'Bob',   latlng: { latitude: 47.615, longitude: -122.340 }, status: 'Parked' },
@@ -54,9 +55,8 @@ export default function MapScreen() {
   const [steps, setSteps] = useState<string[]>([]);
   const [followUser, setFollowUser] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
-  const [showList, setShowList] = useState(false);
 
-  // live gps
+  // Live GPS subscription
   useEffect(() => {
     let sub: Location.LocationSubscription | null = null;
     (async () => {
@@ -65,7 +65,6 @@ export default function MapScreen() {
       const pos = await Location.getCurrentPositionAsync({});
       const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
       setOrigin(loc);
-      mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.05, longitudeDelta: 0.05 }, 1000);
 
       sub = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, distanceInterval: 5 },
@@ -73,7 +72,7 @@ export default function MapScreen() {
           const newLoc = { latitude: p.coords.latitude, longitude: p.coords.longitude };
           setOrigin(newLoc);
           if (followUser) {
-            mapRef.current?.animateToRegion({ ...newLoc, latitudeDelta: 0.02, longitudeDelta: 0.02 }, 500);
+            mapRef.current?.animateCamera({ center: newLoc, pitch: 45, heading: 0 });
           }
         }
       );
@@ -94,48 +93,56 @@ export default function MapScreen() {
     setTimeout(() => setToast(null), 3000);
   };
 
-  // fetch directions + steps
+  // Kick off in‑app routing + fetch turn‑by‑turn
   const startRoute = async (dest: LatLng, description: string) => {
     setDestination(dest);
     setDestDesc(description);
     setNavigating(true);
-    Keyboard.dismiss();
     try {
       const url =
         `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}` +
         `&destination=${dest.latitude},${dest.longitude}&key=${GOOGLE_KEY}`;
       const res = await fetch(url);
       const json = await res.json();
-      const leg = json.routes?.[0]?.legs?.[0];
-      const raw = leg?.steps ?? [];
-      const parsed = raw.map((s: any) => s.html_instructions.replace(/<[^>]+>/g, ''));
+      const legs = json.routes?.[0]?.legs?.[0]?.steps ?? [];
+      const parsed = legs.map((s: any) =>
+        s.html_instructions.replace(/<[^>]+>/g, '')
+      );
       setSteps(parsed);
-      setDistanceKm(leg.distance.value / 1000);
-      setEtaMin(leg.duration.value / 60);
-      mapRef.current?.fitToCoordinates([origin, dest], {
-        edgePadding: { top: 80, right: 80, bottom: 160, left: 80 },
-        animated: true,
-      });
+      // fit map
+      mapRef.current?.fitToCoordinates(
+        [origin, dest],
+        { edgePadding: { top: 80, right: 80, bottom: 160, left: 80 }, animated: true }
+      );
+      setDistanceKm(json.routes[0].legs[0].distance.value / 1000);
+      setEtaMin(json.routes[0].legs[0].duration.value / 60);
     } catch {
       showToast('Unable to load directions.');
     }
   };
 
+  const toggleFollow = () => setFollowUser(f => !f);
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* Search */}
+      {/* ——————— Search Box ——————— */}
       <GooglePlacesAutocomplete
         ref={placesRef}
         placeholder="Where to?"
         fetchDetails
         debounce={200}
-        listViewDisplayed={showList}
-        onFail={() => showToast('Autocomplete error')}
+        listViewDisplayed="auto"
+        nearbyPlacesAPI="GooglePlacesSearch"
+        enablePoweredByContainer={false}
+        predefinedPlaces={[]}
+        currentLocation={false}
         query={{
           key: GOOGLE_KEY,
           language: 'en',
           location: `${origin.latitude},${origin.longitude}`,
           radius: 50000,
+          types: [],          // <-- prevents `.filter` on undefined
+          components: [],     // <-- same here
         }}
         GooglePlacesDetailsQuery={{ fields: 'geometry' }}
         onPress={(data, details) => {
@@ -146,13 +153,14 @@ export default function MapScreen() {
         styles={{
           container: {
             position: 'absolute',
-            top: insets.top,
+            top: insets.top + 10,
             left: 0,
             right: 0,
             zIndex: 5,
+            pointerEvents: 'box-none',
           },
           textInput: {
-            margin: 16,
+            marginHorizontal: 16,
             height: 44,
             borderRadius: 8,
             paddingHorizontal: 10,
@@ -162,20 +170,19 @@ export default function MapScreen() {
           listView: {
             marginHorizontal: 16,
             backgroundColor: '#fff',
-            borderRadius: 8,
             elevation: 5,
-            maxHeight: 200,
+            borderRadius: 8,
+            zIndex: 10,
           },
         }}
         textInputProps={{
-          onFocus: () => setShowList(true),
-          onBlur: () => setShowList(false),
           returnKeyType: 'search',
-          onSubmitEditing: e => startRoute(origin!, e.nativeEvent.text),
+          onSubmitEditing: e =>
+            startRoute(origin, e.nativeEvent.text),
         }}
       />
 
-      {/* Map */}
+      {/* ——————— Map ——————— */}
       <MapView
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
@@ -189,6 +196,7 @@ export default function MapScreen() {
         showsUserLocation
         showsTraffic
         showsCompass
+        pitchEnabled
       >
         <Circle
           center={origin}
@@ -198,7 +206,12 @@ export default function MapScreen() {
         />
 
         {GROUP.map(m => (
-          <Marker key={m.id} coordinate={m.latlng} title={m.name} description={m.status} />
+          <Marker
+            key={m.id}
+            coordinate={m.latlng}
+            title={m.name}
+            description={m.status}
+          />
         ))}
 
         {POLICE_PLANES.map((p, i) => (
@@ -209,38 +222,53 @@ export default function MapScreen() {
 
         {destination && (
           <>
-            <Polyline coordinates={[origin, destination]} strokeWidth={4} strokeColor="#2563eb" />
+            <Polyline
+              coordinates={[origin, destination]}
+              strokeWidth={4}
+              strokeColor="#2563eb"
+            />
             <MapViewDirections
               origin={origin}
               destination={destination}
               apikey={GOOGLE_KEY}
               strokeWidth={4}
               strokeColor="#2563eb"
-              onReady={() => {}}
             />
           </>
         )}
       </MapView>
 
-      {/* Follow FAB */}
-      <Pressable style={[styles.fab, { top: insets.top + 60 }]} onPress={() => setFollowUser(f => !f)}>
-        <Ionicons name={followUser ? 'locate' : 'locate-outline'} size={24} color="#fff" />
+      {/* ——————— Follow‑Me FAB ——————— */}
+      <Pressable
+        style={[styles.fab, { top: insets.top + 60 }]}
+        onPress={toggleFollow}
+      >
+        <Ionicons
+          name={followUser ? 'locate' : 'locate-outline'}
+          size={24}
+          color="#fff"
+        />
       </Pressable>
 
-      {/* Turn‑by‑Turn */}
+      {/* ——————— Turn‑by‑Turn Steps ——————— */}
       {navigating && steps.length > 0 && (
-        <View style={[styles.stepsContainer, { bottom: insets.bottom + 20 }]}>
+        <View
+          style={[
+            styles.stepsContainer,
+            { bottom: insets.bottom + 20 },
+          ]}
+        >
           <ScrollView>
-            {steps.map((st, i) => (
-              <Text key={i} style={styles.stepText}>
-                {i + 1}. {st}
+            {steps.map((st, idx) => (
+              <Text key={idx} style={styles.stepText}>
+                {idx + 1}. {st}
               </Text>
             ))}
           </ScrollView>
         </View>
       )}
 
-      {/* ETA Card */}
+      {/* ——————— ETA & Destination ——————— */}
       {navigating && (
         <View style={[styles.etaCard, { top: insets.top + 10 }]}>
           <Text style={styles.etaText}>
@@ -250,9 +278,14 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* Toast */}
+      {/* ——————— Toast ——————— */}
       {toast && (
-        <View style={[styles.toast, { bottom: insets.bottom + 20 }]}>
+        <View
+          style={[
+            styles.toast,
+            { bottom: insets.bottom + 20 },
+          ]}
+        >
           <Text style={styles.toastText}>{toast}</Text>
         </View>
       )}
@@ -262,47 +295,16 @@ export default function MapScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  center:    { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  fab:       { position: 'absolute', right: 20, backgroundColor: '#2563eb', padding: 12, borderRadius: 24, elevation: 4 },
 
-  fab: {
-    position: 'absolute',
-    right: 20,
-    backgroundColor: '#2563eb',
-    padding: 12,
-    borderRadius: 24,
-    elevation: 4,
-  },
+  etaCard:   { position: 'absolute', alignSelf: 'center', backgroundColor: '#2563eb', padding: 12, borderRadius: 20, elevation: 4 },
+  etaText:   { color: '#fff', fontSize: 16, fontWeight: '600' },
+  etaSub:    { color: '#dbeafe', fontSize: 12, marginTop: 4 },
 
-  etaCard: {
-    position: 'absolute',
-    alignSelf: 'center',
-    backgroundColor: '#2563eb',
-    padding: 12,
-    borderRadius: 20,
-    elevation: 4,
-  },
-  etaText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  etaSub: { color: '#dbeafe', fontSize: 12, marginTop: 4 },
+  stepsContainer: { position: 'absolute', left: 0, right: 0, maxHeight: 200, backgroundColor: '#fff', padding: 12, elevation: 4 },
+  stepText:       { fontSize: 14, marginBottom: 8 },
 
-  stepsContainer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    backgroundColor: '#fff',
-    padding: 12,
-    elevation: 4,
-    maxHeight: 200,
-  },
-  stepText: { fontSize: 14, marginBottom: 8 },
-
-  toast: {
-    position: 'absolute',
-    alignSelf: 'center',
-    backgroundColor: '#333',
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 18,
-    elevation: 4,
-  },
+  toast:     { position: 'absolute', alignSelf: 'center', backgroundColor: '#333', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 18, elevation: 4 },
   toastText: { color: '#fff' },
 });
