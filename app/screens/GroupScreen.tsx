@@ -1,12 +1,13 @@
+// app/screens/GroupScreen.tsx
 import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView } from 'react-native';
+import { SafeAreaView, StyleSheet, Text, View } from 'react-native';
 
-const GroupScreen = () => {
-  const riders = [
-    { id: '1', name: 'Rider A', status: 'On route' },
-    { id: '2', name: 'Rider B', status: 'Parked' },
-  ];
+const riders = [
+  { id: '1', name: 'Alice', status: 'On route' },
+  { id: '2', name: 'Bob',   status: 'Parked'  },
+];
 
+export default function GroupScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <Text style={styles.heading}>Group Members</Text>
@@ -18,23 +19,12 @@ const GroupScreen = () => {
       ))}
     </SafeAreaView>
   );
-};
+}
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff', padding: 16 },
-  heading: { fontSize: 20, fontWeight: '600', marginBottom: 8 },
-  card: {
-    padding: 16,
-    borderRadius: 16,
-    backgroundColor: '#f1f5f9',
-    marginBottom: 8,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  name: { fontSize: 16, fontWeight: '500' },
-  status: { fontSize: 13, color: '#64748b' },
+  heading:   { fontSize: 20, fontWeight: '600', marginBottom: 12 },
+  card:      { backgroundColor: '#f1f5f9', padding: 12, borderRadius: 12, marginBottom: 10 },
+  name:      { fontSize: 16, fontWeight: '500' },
+  status:    { fontSize: 14, color: '#475569', marginTop: 4 },
 });
-
-export default GroupScreen;

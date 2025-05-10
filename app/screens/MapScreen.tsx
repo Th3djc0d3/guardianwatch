@@ -3,13 +3,19 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Keyboard,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
+  ScrollView,
 } from 'react-native';
-import MapView, { Circle, PROVIDER_GOOGLE, LatLng } from 'react-native-maps';
+import MapView, {
+  Marker,
+  Circle,
+  Polyline,
+  PROVIDER_GOOGLE,
+  LatLng,
+} from 'react-native-maps';
 import MapViewDirections from 'react-native-maps-directions';
 import * as Location from 'expo-location';
 import {
@@ -17,83 +23,63 @@ import {
   useSafeAreaInsets,
 } from 'react-native-safe-area-context';
 import { GooglePlacesAutocomplete } from 'react-native-google-places-autocomplete';
+import { Ionicons } from '@expo/vector-icons';
 import 'react-native-get-random-values';
 
+// your ENV key
 const GOOGLE_KEY = process.env.EXPO_PUBLIC_PLACES_KEY!;
+if (!GOOGLE_KEY) throw new Error('Missing EXPO_PUBLIC_PLACES_KEY');
 
-/* ───────────────── helper ───────────────── */
-async function fetchPlace(placeId: string) {
-  const url =
-    `https://maps.googleapis.com/maps/api/place/details/json?place_id=` +
-    `${placeId}&key=${GOOGLE_KEY}`;
-  const json = await (await fetch(url)).json();
-  return json.result?.geometry?.location;
-}
+// dummy data
+const GROUP = [
+  { id: '1', name: 'Alice', latlng: { latitude: 47.61, longitude: -122.335 }, status: 'On route' },
+  { id: '2', name: 'Bob',   latlng: { latitude: 47.615, longitude: -122.340 }, status: 'Parked' },
+];
+const POLICE_PLANES: LatLng[] = [
+  { latitude: 47.650, longitude: -122.300 },
+  { latitude: 47.580, longitude: -122.360 },
+];
 
 export default function MapScreen() {
+  const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView>(null);
   const placesRef = useRef<GooglePlacesAutocomplete>(null);
-  const insets = useSafeAreaInsets();
 
   const [origin, setOrigin] = useState<LatLng | null>(null);
-  const [destination, setDestination] = useState<
-    | { latlng: LatLng; description: string }
-    | null
-  >(null);
-
+  const [destination, setDestination] = useState<LatLng | null>(null);
+  const [destDesc, setDestDesc] = useState<string>('');
   const [navigating, setNavigating] = useState(false);
-  const [etaMin, setEtaMin] = useState<number | null>(null);
   const [distanceKm, setDistanceKm] = useState<number | null>(null);
+  const [etaMin, setEtaMin] = useState<number | null>(null);
+  const [steps, setSteps] = useState<string[]>([]);
+  const [followUser, setFollowUser] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
+  const [showList, setShowList] = useState(false);
 
-  /* ─────────── live GPS ─────────── */
+  // live gps
   useEffect(() => {
     let sub: Location.LocationSubscription | null = null;
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
-      const first = await Location.getCurrentPositionAsync({});
-      setOrigin({
-        latitude: first.coords.latitude,
-        longitude: first.coords.longitude,
-      });
+      const pos = await Location.getCurrentPositionAsync({});
+      const loc = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
+      setOrigin(loc);
+      mapRef.current?.animateToRegion({ ...loc, latitudeDelta: 0.05, longitudeDelta: 0.05 }, 1000);
+
       sub = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.High, distanceInterval: 10 },
-        pos =>
-          setOrigin({
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          })
+        { accuracy: Location.Accuracy.High, distanceInterval: 5 },
+        p => {
+          const newLoc = { latitude: p.coords.latitude, longitude: p.coords.longitude };
+          setOrigin(newLoc);
+          if (followUser) {
+            mapRef.current?.animateToRegion({ ...newLoc, latitudeDelta: 0.02, longitudeDelta: 0.02 }, 500);
+          }
+        }
       );
     })();
     return () => sub?.remove();
-  }, []);
-
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(null), 2500);
-  };
-
-  async function handleManualLookup(q: string) {
-    if (!q) return;
-    Keyboard.dismiss();
-    const url =
-      `https://maps.googleapis.com/maps/api/place/textsearch/json?query=` +
-      `${encodeURIComponent(q)}&key=${GOOGLE_KEY}`;
-    try {
-      const json = await (await fetch(url)).json();
-      const loc = json.results?.[0]?.geometry?.location;
-      if (loc) {
-        setDestination({
-          latlng: { latitude: loc.lat, longitude: loc.lng },
-          description: json.results[0].name,
-        });
-        setNavigating(true);
-      } else showToast('Nothing found.');
-    } catch {
-      showToast('Search failed.');
-    }
-  }
+  }, [followUser]);
 
   if (!origin) {
     return (
@@ -103,60 +89,71 @@ export default function MapScreen() {
     );
   }
 
+  const showToast = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  // fetch directions + steps
+  const startRoute = async (dest: LatLng, description: string) => {
+    setDestination(dest);
+    setDestDesc(description);
+    setNavigating(true);
+    Keyboard.dismiss();
+    try {
+      const url =
+        `https://maps.googleapis.com/maps/api/directions/json?origin=${origin.latitude},${origin.longitude}` +
+        `&destination=${dest.latitude},${dest.longitude}&key=${GOOGLE_KEY}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      const leg = json.routes?.[0]?.legs?.[0];
+      const raw = leg?.steps ?? [];
+      const parsed = raw.map((s: any) => s.html_instructions.replace(/<[^>]+>/g, ''));
+      setSteps(parsed);
+      setDistanceKm(leg.distance.value / 1000);
+      setEtaMin(leg.duration.value / 60);
+      mapRef.current?.fitToCoordinates([origin, dest], {
+        edgePadding: { top: 80, right: 80, bottom: 160, left: 80 },
+        animated: true,
+      });
+    } catch {
+      showToast('Unable to load directions.');
+    }
+  };
+
   return (
     <SafeAreaView style={styles.container}>
-      {/* ───────── search box ───────── */}
+      {/* Search */}
       <GooglePlacesAutocomplete
         ref={placesRef}
         placeholder="Where to?"
-        minLength={2}
         fetchDetails
-        debounce={300}
-        enablePoweredByContainer={false}
+        debounce={200}
+        listViewDisplayed={showList}
+        onFail={() => showToast('Autocomplete error')}
         query={{
           key: GOOGLE_KEY,
           language: 'en',
           location: `${origin.latitude},${origin.longitude}`,
-          rankby: 'distance',
+          radius: 50000,
         }}
-        predefinedPlaces={[]}
-        currentLocation={false}
-        textInputProps={{
-          editable: !navigating,
-          returnKeyType: 'search',
-          onSubmitEditing: e => handleManualLookup(e.nativeEvent.text),
-          onFocus: () => {},
-        }}
-        onPress={async (data, details) => {
-          let lat = details?.geometry?.location?.lat;
-          let lng = details?.geometry?.location?.lng;
-          if (!lat || !lng) {
-            const fetched = await fetchPlace(data.place_id);
-            lat = fetched?.lat;
-            lng = fetched?.lng;
-          }
-          if (lat && lng) {
-            setDestination({
-              latlng: { latitude: lat, longitude: lng },
-              description: data.description,
-            });
-            placesRef.current?.setAddressText(data.description);
-            setNavigating(true);
-            Keyboard.dismiss();
-          } else showToast('Unable to get coordinates.');
+        GooglePlacesDetailsQuery={{ fields: 'geometry' }}
+        onPress={(data, details) => {
+          const loc = details?.geometry?.location;
+          if (loc) startRoute({ latitude: loc.lat, longitude: loc.lng }, data.description);
+          else showToast('Coordinates unavailable');
         }}
         styles={{
           container: {
             position: 'absolute',
-            top: insets.top + 10,
+            top: insets.top,
             left: 0,
             right: 0,
-            zIndex: 3,
-            pointerEvents: navigating ? 'none' : 'box-none',
+            zIndex: 5,
           },
           textInput: {
+            margin: 16,
             height: 44,
-            marginHorizontal: 16,
             borderRadius: 8,
             paddingHorizontal: 10,
             backgroundColor: '#fff',
@@ -165,83 +162,97 @@ export default function MapScreen() {
           listView: {
             marginHorizontal: 16,
             backgroundColor: '#fff',
-            elevation: 5,
             borderRadius: 8,
-            zIndex: 3,
+            elevation: 5,
+            maxHeight: 200,
           },
+        }}
+        textInputProps={{
+          onFocus: () => setShowList(true),
+          onBlur: () => setShowList(false),
+          returnKeyType: 'search',
+          onSubmitEditing: e => startRoute(origin!, e.nativeEvent.text),
         }}
       />
 
-      {/* ───────── map ───────── */}
+      {/* Map */}
       <MapView
         ref={mapRef}
-        {...(Platform.OS === 'android' ? { provider: PROVIDER_GOOGLE } : {})}
+        provider={PROVIDER_GOOGLE}
         style={StyleSheet.absoluteFill}
-        showsUserLocation
-        followsUserLocation
-        region={{
+        initialRegion={{
           latitude: origin.latitude,
           longitude: origin.longitude,
           latitudeDelta: 0.05,
           longitudeDelta: 0.05,
         }}
+        showsUserLocation
+        showsTraffic
+        showsCompass
       >
         <Circle
           center={origin}
           radius={12070}
-          strokeWidth={1}
-          strokeColor="#1e3a8a55"
+          strokeColor="rgba(30,58,138,0.3)"
+          fillColor="rgba(30,58,138,0.1)"
         />
 
+        {GROUP.map(m => (
+          <Marker key={m.id} coordinate={m.latlng} title={m.name} description={m.status} />
+        ))}
+
+        {POLICE_PLANES.map((p, i) => (
+          <Marker key={i} coordinate={p}>
+            <Ionicons name="airplane" size={24} color="red" />
+          </Marker>
+        ))}
+
         {destination && (
-          <MapViewDirections
-            origin={origin}
-            destination={destination.latlng}
-            apikey={GOOGLE_KEY}
-            strokeWidth={4}
-            strokeColor="#2563eb"
-            onReady={({ distance, duration, coordinates }) => {
-              setDistanceKm(distance);
-              setEtaMin(duration);
-              mapRef.current?.fitToCoordinates(coordinates, {
-                edgePadding: { top: 80, right: 80, bottom: 80, left: 80 },
-                animated: true,
-              });
-            }}
-          />
+          <>
+            <Polyline coordinates={[origin, destination]} strokeWidth={4} strokeColor="#2563eb" />
+            <MapViewDirections
+              origin={origin}
+              destination={destination}
+              apikey={GOOGLE_KEY}
+              strokeWidth={4}
+              strokeColor="#2563eb"
+              onReady={() => {}}
+            />
+          </>
         )}
       </MapView>
 
-      {/* ───────── nav controls ───────── */}
-      {navigating && destination && (
-        <>
-          <Pressable
-            style={({ pressed }) => [
-              styles.endBtn,
-              { opacity: pressed ? 0.85 : 1 },
-            ]}
-            onPress={() => {
-              setNavigating(false);
-              setDestination(null);
-              setEtaMin(null);
-              setDistanceKm(null);
-              placesRef.current?.setAddressText('');
-            }}
-          >
-            <Text style={styles.btnText}>End Navigation</Text>
-          </Pressable>
+      {/* Follow FAB */}
+      <Pressable style={[styles.fab, { top: insets.top + 60 }]} onPress={() => setFollowUser(f => !f)}>
+        <Ionicons name={followUser ? 'locate' : 'locate-outline'} size={24} color="#fff" />
+      </Pressable>
 
-          <View style={[styles.etaCard, { top: insets.top + 60 }]}>
-            <Text style={styles.etaText}>
-              {distanceKm?.toFixed(1)} km • {Math.round(etaMin ?? 0)} min
-            </Text>
-            <Text style={styles.etaSub}>{destination.description}</Text>
-          </View>
-        </>
+      {/* Turn‑by‑Turn */}
+      {navigating && steps.length > 0 && (
+        <View style={[styles.stepsContainer, { bottom: insets.bottom + 20 }]}>
+          <ScrollView>
+            {steps.map((st, i) => (
+              <Text key={i} style={styles.stepText}>
+                {i + 1}. {st}
+              </Text>
+            ))}
+          </ScrollView>
+        </View>
       )}
 
+      {/* ETA Card */}
+      {navigating && (
+        <View style={[styles.etaCard, { top: insets.top + 10 }]}>
+          <Text style={styles.etaText}>
+            {distanceKm?.toFixed(1)} km • {Math.round(etaMin ?? 0)} min
+          </Text>
+          <Text style={styles.etaSub}>{destDesc}</Text>
+        </View>
+      )}
+
+      {/* Toast */}
       {toast && (
-        <View style={[styles.toast, { top: insets.top + 60 }]}>
+        <View style={[styles.toast, { bottom: insets.bottom + 20 }]}>
           <Text style={styles.toastText}>{toast}</Text>
         </View>
       )}
@@ -249,35 +260,40 @@ export default function MapScreen() {
   );
 }
 
-/* ───────── styles ───────── */
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#fff' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  endBtn: {
+  fab: {
     position: 'absolute',
-    bottom: 40,
-    left: '18%',
-    right: '18%',
-    backgroundColor: '#dc2626',
-    borderRadius: 30,
-    paddingVertical: 14,
-    alignItems: 'center',
+    right: 20,
+    backgroundColor: '#2563eb',
+    padding: 12,
+    borderRadius: 24,
     elevation: 4,
   },
-  btnText: { color: '#fff', fontSize: 16, fontWeight: '600' },
 
   etaCard: {
     position: 'absolute',
     alignSelf: 'center',
     backgroundColor: '#2563eb',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    padding: 12,
     borderRadius: 20,
     elevation: 4,
   },
   etaText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  etaSub: { color: '#dbeafe', fontSize: 12, marginTop: 2 },
+  etaSub: { color: '#dbeafe', fontSize: 12, marginTop: 4 },
+
+  stepsContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    backgroundColor: '#fff',
+    padding: 12,
+    elevation: 4,
+    maxHeight: 200,
+  },
+  stepText: { fontSize: 14, marginBottom: 8 },
 
   toast: {
     position: 'absolute',
